@@ -18,7 +18,23 @@ This is meant to be used with skinned models only, backgrounds and or static obj
 # Support (Software)
 Only 3Ds Max MaxScript is supported, should work with any version after 2009. Tested on 2017.
 
+Extract to `scripts` folder in root folder of 3DS Max and a new rollout panel should appear with `MK MESH IO` button.
+
 Python Blender (4.0) proof of script by Allen to import/export directly is available, but it is not finished nor tested a lot.
+
+# Usage
+
+Extract a .dff model from PS2/PSP using [SSFExplorer](https://ermaccer.github.io/posts/ssfexplorer/), the preview window will say whether its a .dff or not.
+Then in command line
+
+`mkmodeltool -e FILE`, will produce `FILE.mesh`, this is the file to import.
+
+Do your changes, export as .mesh again and in command line:
+
+`mkmodeltool -t CHARACTER -c FILENEW.mesh`, will produce `FILE.mesh.dff`, ready to use in game.
+
+CHARACTER is used by every single character model, reflection uses REFLECTION and konquest NPCs and other skinned objects can use SKINNED.
+
 
 
 # Credits
