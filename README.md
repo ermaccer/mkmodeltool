@@ -24,6 +24,8 @@ Python Blender (4.0) proof of script by Allen to import/export directly is avail
 
 # Usage
 
+Run without params for full list.
+
 Extract a .dff model from PS2/PSP using [SSFExplorer](https://ermaccer.github.io/posts/ssfexplorer/), the preview window will say whether its a .dff or not.
 Then in command line
 
