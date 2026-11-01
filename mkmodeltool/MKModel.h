@@ -10,7 +10,7 @@ using namespace DirectX;
 #define MAX_STRIPS 64
 #define MAX_PALETTE 64
 
-enum EMeshFlags 
+enum EMeshFlags
 {
 	EMF_Normals = 1,
 	EMF_UV = 2,
@@ -29,13 +29,36 @@ struct MKVert
 	float bw[4];
 };
 
-struct MKFace 
+
+struct PSPVertexFormat
+{
+	int uvFormat;
+	int colorFormat;
+	int normalFormat;
+	int positionFormat;
+	int weightFormat;
+	int indexFormat;
+	int numWeights;
+	int numVertices;
+	int coordType;
+};
+
+struct PSPSkinData
+{
+	int boneCount;
+	int numUsedBone;
+	int maxWeights;
+	std::vector<int> usedBoneIndexList;
+	std::vector<std::vector<int>> bonePalettes;
+};
+
+struct MKFace
 {
 	unsigned int v[3];
 };
 
 #pragma pack (push,1)
-struct MKMaterial 
+struct MKMaterial
 {
 	// RenderWare base
 	unsigned char  r, g, b, a;
@@ -75,7 +98,7 @@ struct MKMaterial
 };
 #pragma pack(pop)
 
-struct MKMeshGroup 
+struct MKMeshGroup
 {
 	unsigned int matID;
 	unsigned int firstFace;
@@ -95,7 +118,7 @@ struct MKModelHeader
 };
 
 #pragma pack (push,1)
-struct MKModelBone 
+struct MKModelBone
 {
 	float mat[12]; // 3x3 rotation, xyz translation
 	int parent;
@@ -107,7 +130,7 @@ struct MKModelBone
 };
 #pragma pack(pop)
 
-struct MKFrameInfo 
+struct MKFrameInfo
 {
 	XMFLOAT4X4 matrix;
 	int parentID;
@@ -139,13 +162,13 @@ struct MKAtomic
 	int geoID;
 };
 
-struct TriStripReference 
-{ 
-	char* data; 
-	int size; 
+struct TriStripReference
+{
+	char* data;
+	int size;
 };
 
-struct VertexIDList 
+struct VertexIDList
 {
 	std::vector<int> ids;
 	std::vector<int> skipFlags;
@@ -174,7 +197,7 @@ struct MKSkinData
 	int maxWeights = 0;
 	int numVert = 0;
 	std::vector<unsigned char> boneID;
-	std::vector<unsigned char> boneWgt; 
+	std::vector<unsigned char> boneWgt;
 	std::vector<int> usedBoneList;
 };
 

@@ -71,6 +71,78 @@ static int CountWeights(MKVert& v)
 }
 
 
+static PSPVertexFormat DecodePSPVertexType(int vtype)
+{
+	PSPVertexFormat f;
+	f.uvFormat = vtype & 3;
+	f.colorFormat = (vtype >> 2) & 7;
+	f.normalFormat = (vtype >> 5) & 3;
+	f.positionFormat = (vtype >> 7) & 3;
+	f.weightFormat = (vtype >> 9) & 3;
+	f.indexFormat = (vtype >> 11) & 3;
+	f.numWeights = ((vtype >> 14) & 7) + 1;
+	f.numVertices = ((vtype >> 18) & 7) + 1;
+	f.coordType = (vtype >> 23) & 1;
+	return f;
+}
+
+static PSPSkinData ReadPSPSkin(std::vector<char>& d)
+{
+	PSPSkinData sk;
+	int pos = 0;
+	pos += 12; // RW_STRUCT header
+	pos += 4;  // platform
+
+	sk.boneCount = (unsigned char)d[pos++];
+	sk.numUsedBone = (unsigned char)d[pos++];
+	sk.maxWeights = (unsigned char)d[pos++];
+	pos++; // pad
+
+	for (int i = 0; i < sk.boneCount; i++)
+		pos += sizeof(XMFLOAT4X4);
+
+	pos += 20; // skip unknown
+
+	int boneLimit;
+	memcpy(&boneLimit, d.data() + pos, 4); pos += 4;
+	int numSplit;
+	memcpy(&numSplit, d.data() + pos, 4); pos += 4;
+	int numBonePalette;
+	memcpy(&numBonePalette, d.data() + pos, 4); pos += 4;
+
+	if (numSplit > 0)
+	{
+		sk.usedBoneIndexList.resize(sk.boneCount);
+		for (int i = 0; i < sk.boneCount; i++)
+			sk.usedBoneIndexList[i] = (unsigned char)d[pos++];
+	}
+
+	int table1Offset = pos;
+	int table2Offset = pos + numSplit * 2;
+
+	sk.bonePalettes.resize(numSplit);
+	for (int i = 0; i < numSplit; i++)
+	{
+		int t1pos = table1Offset + i * 2;
+		int table2ID = (unsigned char)d[t1pos];
+		int numID = (unsigned char)d[t1pos + 1];
+
+		std::vector<int> boneIDs;
+		int t2pos = table2Offset + table2ID * 2;
+		for (int b = 0; b < numID; b++)
+		{
+			int boneID = (unsigned char)d[t2pos++];
+			int cnt = (unsigned char)d[t2pos++];
+			for (int bi = 0; bi < cnt; bi++)
+				boneIDs.push_back(boneID + bi);
+		}
+		sk.bonePalettes[i] = boneIDs;
+	}
+
+	printf_s("PSP Skin: boneCount=%d numSplit=%d\n", sk.boneCount, numSplit);
+	return sk;
+}
+
 
 bool MKModelTool::LoadDFF(std::string path)
 {
@@ -94,6 +166,11 @@ bool MKModelTool::LoadDFF(std::string path)
 	pFile.read((char*)&numAtomics, sizeof(int));
 
 	unsigned int rwVersion = UnpackRWVersion(clumpHeader.rwLibraryID);
+
+	isPSP = (clumpHeader.rwLibraryID == 0x1C020064);
+	if (isPSP)
+		printf_s("Detected PSP format\n");
+
 	if (rwVersion >= 0x33000)
 	{
 		pFile.read((char*)&numLights, sizeof(int));
@@ -120,9 +197,11 @@ bool MKModelTool::LoadDFF(std::string path)
 	unsigned int geometryStartOffset = (unsigned int)pFile.tellg();
 	unsigned int geoListEnd = geometryStartOffset - 12 - geometryListStruct.size + geometryListHeader.size;
 	pFile.seekg(geoListEnd, pFile.beg);
+#ifdef _DEBUG
 	printf_s("geometryListHeader id=0x%X size=%d\n", geometryListHeader.rwSectionID, geometryListHeader.size);
 	printf_s("geometryListStruct id=0x%X size=%d\n", geometryListStruct.rwSectionID, geometryListStruct.size);
 	printf_s("geometryCount=%d pos=%d\n", geometryCount, (unsigned int)pFile.tellg());
+#endif
 	ReadAtomics();
 	pFile.seekg(geometryStartOffset, pFile.beg);
 
@@ -292,7 +371,9 @@ void MKModelTool::ReadFrameList(MKFrameList* fl)
 				pFile.read((char*)&frame.animBoneID, sizeof(int));
 				int boneCount = 0;
 				pFile.read((char*)&boneCount, sizeof(int));
-				printf_s("  frame %d: HAnim found, animBoneID=%d boneCount=%d\n", i, frame.animBoneID, boneCount);
+#ifdef _DEBUG
+				printf_s("Frame %d: HAnim found, animBoneID=%d boneCount=%d\n", i, frame.animBoneID, boneCount);
+#endif
 				if (boneCount <= 0)
 					continue;
 
@@ -477,31 +558,26 @@ void MKModelTool::ReadAtomics()
 
 void MKModelTool::ReadMaterial(MKMaterial& om)
 {
+	ZeroMemory(&om, sizeof(MKMaterial));
+
 	RWChunk hdr;
 	pFile.read((char*)&hdr, sizeof(RWChunk));
-	int unused;
-	pFile.read((char*)&unused, sizeof(int));
-	pFile.read((char*)&om.r, sizeof(unsigned char)); pFile.read((char*)&om.g, sizeof(unsigned char));
-	pFile.read((char*)&om.b, sizeof(unsigned char)); pFile.read((char*)&om.a, sizeof(unsigned char));
-	int unused2;
-	pFile.read((char*)&unused2, sizeof(int));
+	int pad;
+	pFile.read((char*)&pad, sizeof(int));
+	pFile.read((char*)&om.r, sizeof(unsigned char));
+	pFile.read((char*)&om.g, sizeof(unsigned char));
+	pFile.read((char*)&om.b, sizeof(unsigned char));
+	pFile.read((char*)&om.a, sizeof(unsigned char));
+	pFile.read((char*)&pad, sizeof(int));
 	pFile.read((char*)&om.hasTexture, sizeof(int));
 	pFile.read((char*)&om.rw_ambient, sizeof(float));
 	pFile.read((char*)&om.rw_specular, sizeof(float));
 	pFile.read((char*)&om.rw_diffuse, sizeof(float));
 
-	ZeroMemory(om.tex, 64); ZeroMemory(om.alphaTex, 64);
-	om.texFilter = 0; om.uAddressing = 0; om.vAddressing = 0;
-	om.useMipLevel = 0; om.hasSkyMipmap = 0;
-	om.skyMipmapK = 0; om.skyMipmapL = 0;
-	om.mkFlag = 0; om.mkType = 0; om.mkFlagsUpper = 0;
-	om.mkUnk1 = 0; om.mkUnk2 = 0; om.mkUnk3 = 0;
-	om.mkUseBonePalette = 0; om.mkBonePaletteCount = 0;
-	om.mkSpecR = 127; om.mkSpecG = 127; om.mkSpecB = 127; om.mkSpecA = 255;
-	om.mkUnk5 = 0; om.mkUnk6 = 0;
-	om.mkUVScroll = 0; om.mkScrollX = 0; om.mkScrollY = 0; om.mkScrollZ = 0; om.mkScrollPad = 0;
-	om.mkMeshType = 0;
-
+	om.mkSpecR = 127;
+	om.mkSpecG = 127;
+	om.mkSpecB = 127;
+	om.mkSpecA = 255;
 	if (om.hasTexture)
 	{
 		RWChunk th;
@@ -562,6 +638,14 @@ void MKModelTool::ReadMaterial(MKMaterial& om)
 			pFile.read((char*)&flag, sizeof(int));
 			om.mkFlag = flag;
 			om.mkType = flag & 0xFFFF;
+
+
+			// mkda to mkd
+			if (om.mkType == 1)
+				om.mkType = 5;
+
+
+
 			om.mkFlagsUpper = flag >> 16;
 			int first = flag & 0xFFFF, second = flag >> 16;
 			pFile.read((char*)&om.mkUnk1, sizeof(short));
@@ -600,7 +684,14 @@ void MKModelTool::ReadMaterial(MKMaterial& om)
 				}
 			}
 			if (first >= 5)
+			{
 				pFile.read((char*)&om.mkMeshType, sizeof(int));
+
+				// conversion here!!!
+				//if (om.mkMeshType == 1024)
+				//	om.mkMeshType = 128;
+			}
+
 		}
 		else
 		{
@@ -682,7 +773,9 @@ void MKModelTool::ReadGeometry(int geoIndex)
 	pFile.read((char*)&numVert, sizeof(unsigned int));
 	unsigned int numMorph = 0;
 	pFile.read((char*)&numMorph, sizeof(unsigned int));
+#ifdef _DEBUG
 	printf_s("ReadGeometry(%d) nativeFlags=%d\n", geoIndex, nativeFlags);
+#endif
 	int Prelit = (fmtFlags >> 3) & 1;
 	int Textured = (fmtFlags >> 2) & 1;
 	int Meshes = (fmtFlags >> 1) & 1;
@@ -720,10 +813,15 @@ void MKModelTool::ReadGeometry(int geoIndex)
 	// mkda uses morphs for stage animations eg wu shi banners
 	std::vector<float> vertPos;
 	std::vector<float> vertNrm;
-
+	float sphereX = 0;
+	float sphereY = 0;
+	float sphereZ = 0;
 	for (unsigned int m = 0; m < numMorph; m++)
 	{
-		pFile.seekg(12, pFile.cur);
+
+		pFile.read((char*)&sphereX, sizeof(float));
+		pFile.read((char*)&sphereY, sizeof(float));
+		pFile.read((char*)&sphereZ, sizeof(float));
 		float radius;
 		pFile.read((char*)&radius, sizeof(float));
 		unsigned int posF = 0;
@@ -827,7 +925,8 @@ void MKModelTool::ReadGeometry(int geoIndex)
 	unsigned int geEnd = (unsigned int)pFile.tellg() + geH.size;
 	bool isSkin = false;
 	bool isBM = false;
-	std::vector<char> skinD, bmD;
+	bool isGamecube = false;
+	std::vector<char> skinD, bmD, nativeD;
 
 	while ((unsigned int)pFile.tellg() < geEnd)
 	{
@@ -845,12 +944,24 @@ void MKModelTool::ReadGeometry(int geoIndex)
 			skinD.resize(h.size);
 			pFile.read(skinD.data(), h.size);
 		}
+		else if (h.rwSectionID == 0x510) // rwID_NATIVEDATAPLUGIN gc only
+		{
+			isGamecube = true;
+			nativeD.resize(h.size);
+			pFile.read(nativeD.data(), h.size);
+		}
 		else
 		{
 			pFile.seekg(h.size, pFile.cur);
 		}
 	}
 	pFile.seekg(geEnd, pFile.beg);
+
+	if (isGamecube)
+	{
+		std::cout << "ERROR: GC/WII dff not supported!" << std::endl;
+		return;
+	}
 
 	MKSkinData skin;
 	MKBinMeshPLG bm;
@@ -909,18 +1020,47 @@ void MKModelTool::ReadGeometry(int geoIndex)
 			if (hasSkin)
 			{
 				meshFlags |= EMF_Skinned;
-				float wts[4];
-				memcpy(wts, skin.boneWgt.data() + i * 16, 16);
+				float weights[4];
+				memcpy(weights, skin.boneWgt.data() + i * 16, 16);
 				unsigned char ID[4];
 				memcpy(ID, skin.boneID.data() + i * 4, 4);
 
 				for (int w = 0; w < 4; w++)
 				{
-					if (wts[w] > 0 && rwVer < 0x34000 && skin.maxWeights == 0)
-						ID[w] = (unsigned char)skin.usedBoneList[ID[w]];
+					if (weights[w] > 0 && skin.maxWeights == 0 && skin.usedBoneCount > 0)
+					{
+						int skinBoneIdx = skin.usedBoneList[ID[w]];
+						int frameID = 0;
+						for (int h = 0; h < hanimCount; h++)
+						{
+							if (frameList.hSkinBoneID[h] == skinBoneIdx)
+							{
+								frameID = frameList.hanimToFrame[h];
+								break;
+							}
+						}
+						ID[w] = (unsigned char)frameID;
+					}
+					else if (weights[w] > 0 && skin.usedBoneCount == 0 &&
+						skin.boneCount > 0 && skin.boneCount != hanimCount)
+					{
+						int boneIdx = ID[w];
+						if (boneIdx >= 0 && boneIdx < skin.boneCount)
+						{
+							int hAnimID = skin.usedBoneList[boneIdx];
+							if (hAnimID >= 0 && hAnimID < hanimCount)
+								ID[w] = (unsigned char)frameList.hanimToFrame[hAnimID];
+						}
+					}
+					else if (weights[w] > 0 && skin.usedBoneCount == 0 && hanimCount > 0)
+					{
+						int boneIdx = ID[w];
+						if (boneIdx >= 0 && boneIdx < hanimCount)
+							ID[w] = (unsigned char)frameList.hanimToFrame[boneIdx];
+					}
 				}
 				memcpy(v.bi, ID, 4);
-				memcpy(v.bw, wts, 16);
+				memcpy(v.bw, weights, 16);
 			}
 			verts.push_back(v);
 		}
@@ -955,8 +1095,8 @@ void MKModelTool::ReadGeometry(int geoIndex)
 		}
 	}
 
-	// mkd/mka
-	if (nativeFlags == 1 && geoStruct.size > 40 && isBM)
+	// mkd/mka PS2
+	if (nativeFlags == 1 && geoStruct.size > 40 && isBM && !isPSP)
 	{
 		int splitCount = bm.numSplits;
 
@@ -1494,6 +1634,265 @@ void MKModelTool::ReadGeometry(int geoIndex)
 		}
 		pFile.seekg(afterSkin, pFile.beg);
 	}
+	// mku PSP
+	if (nativeFlags == 1 && isPSP && isBM)
+	{
+		int splitCount = bm.numSplits;
+
+		RWChunk nativeHdr;
+		pFile.read((char*)&nativeHdr, sizeof(RWChunk));
+		unsigned int nativeEnd = (unsigned int)pFile.tellg() + nativeHdr.size;
+		pFile.seekg(nativeEnd, pFile.beg);
+
+		PSPSkinData pspSkin;
+		bool hasPSPSkin = false;
+		if (MKSkinFlag)
+		{
+			RWChunk skinHdr;
+			pFile.read((char*)&skinHdr, sizeof(RWChunk));
+			pFile.seekg(-12, pFile.cur);
+			std::vector<char> skinData(skinHdr.size + 12);
+			pFile.read(skinData.data(), skinHdr.size + 12);
+			pspSkin = ReadPSPSkin(skinData);
+			hasPSPSkin = true;
+		}
+		unsigned int afterSkin = (unsigned int)pFile.tellg();
+
+		unsigned int nativeDataStart = nativeEnd - nativeHdr.size;
+		pFile.seekg(nativeDataStart, pFile.beg);
+
+		int platformID;
+		pFile.read((char*)&platformID, sizeof(int));
+
+		unsigned int curOfs = (unsigned int)pFile.tellg();
+		unsigned int padLen = 0;
+		if ((curOfs - 24) % 16)
+			padLen = 16 - ((curOfs - 24) % 16);
+		pFile.seekg(padLen, pFile.cur);
+
+		unsigned int baseOffset = (unsigned int)pFile.tellg();
+		int chunkSize;
+		pFile.read((char*)&chunkSize, sizeof(int));
+		short numStrip;
+		pFile.read((char*)&numStrip, sizeof(short));
+		short pspSplitCount;
+		pFile.read((char*)&pspSplitCount, sizeof(short));
+
+		pFile.seekg(pspSplitCount * 32 + 16, pFile.cur);
+
+		meshFlags |= EMF_Normals;
+
+		for (int sp = 0; sp < pspSplitCount; sp++)
+		{
+			pFile.seekg(16, pFile.cur);
+			int format;
+			pFile.read((char*)&format, sizeof(int));
+			int unk;
+			pFile.read((char*)&unk, sizeof(int));
+			int numIndices;
+			pFile.read((char*)&numIndices, sizeof(int));
+			int dataOffset;
+			pFile.read((char*)&dataOffset, sizeof(int));
+			pFile.seekg(16, pFile.cur);
+			int infoOffset;
+			pFile.read((char*)&infoOffset, sizeof(int));
+			int stride;
+			pFile.read((char*)&stride, sizeof(int));
+			int matrixOffset;
+			pFile.read((char*)&matrixOffset, sizeof(int));
+			pFile.seekg(4, pFile.cur);
+			unsigned int nextOfs = (unsigned int)pFile.tellg();
+
+
+			pFile.seekg(baseOffset + matrixOffset, pFile.beg);
+			float scaleMatrix[16];
+			pFile.read((char*)scaleMatrix, 64);
+
+			PSPVertexFormat vf = DecodePSPVertexType(format);
+
+			pFile.seekg(baseOffset + dataOffset, pFile.beg);
+
+			unsigned int vertBase = (unsigned int)verts.size();
+			unsigned int faceStart = (unsigned int)faces.size();
+			int matID = bm.matIDs[sp];
+
+			for (int vi = 0; vi < numIndices; vi++)
+			{
+				MKVert v = {};
+
+				float weights[8] = {};
+				int boneIdxs[8] = {};
+				for (int w = 0; w < vf.numWeights; w++)
+				{
+					if (vf.weightFormat == 1)
+					{
+						unsigned char wb;
+						pFile.read((char*)&wb, sizeof(char));
+						float weight;
+						if (wb == 128)
+							weight = 1.0f;
+						else
+							weight = wb / 127.0f;
+						weights[w] = weight;
+
+						if (weight > 0 && hasPSPSkin && sp < (int)pspSkin.bonePalettes.size() && w < (int)pspSkin.bonePalettes[sp].size())
+							boneIdxs[w] = frameList.hSkinBoneID[pspSkin.bonePalettes[sp][w]];
+					}
+				}
+
+				// uv
+				if (vf.uvFormat == 1)
+				{
+					char tu, tv;
+					pFile.read(&tu, sizeof(char));
+					pFile.read(&tv, sizeof(char));
+					v.uv[0] = tu / 127.0f;
+					v.uv[1] = 1.0f - (tv / 127.0f);
+					meshFlags |= EMF_UV;
+				}
+
+				// vertex color
+				if (vf.colorFormat == 6)
+				{
+					unsigned short color;
+					pFile.read((char*)&color, sizeof(short));
+					v.col[0] = (color << 4) & 0xF0;
+					v.col[1] = (color) & 0xF0;
+					v.col[2] = (color >> 4) & 0xF0;
+					v.col[3] = (color >> 8) & 0xF0;
+					meshFlags |= EMF_VertexColor;
+				}
+
+				// normals
+				if (vf.normalFormat == 1)
+				{
+					char nx, ny, nz;
+					pFile.read(&nx, sizeof(char));
+					pFile.read(&ny, sizeof(char));
+					pFile.read(&nz, sizeof(char));
+					v.nrm[0] = nx / 127.0f;
+					v.nrm[1] = ny / 127.0f;
+					v.nrm[2] = nz / 127.0f;
+				}
+
+				// xyz compression 1/2
+				if (vf.positionFormat == 1)
+				{
+					char px, py, pz;
+					pFile.read(&px, sizeof(char));
+					pFile.read(&py, sizeof(char));
+					pFile.read(&pz, sizeof(char));
+					v.pos[0] = (px / 127.0f) * scaleMatrix[0] + sphereX;
+					v.pos[1] = (py / 127.0f) * scaleMatrix[5] + sphereY;
+					v.pos[2] = (pz / 127.0f) * scaleMatrix[10] + sphereZ;
+				}
+				else if (vf.positionFormat == 2)
+				{
+					short px, py, pz;
+					pFile.read((char*)&px, sizeof(short));
+					pFile.read((char*)&py, sizeof(short));
+					pFile.read((char*)&pz, sizeof(short));
+					v.pos[0] = (px / 32767.0f) * scaleMatrix[0] + sphereX;
+					v.pos[1] = (py / 32767.0f) * scaleMatrix[5] + sphereY;
+					v.pos[2] = (pz / 32767.0f) * scaleMatrix[10] + sphereZ;
+				}
+
+				// skinnning
+				if (hasPSPSkin && MKSkinFlag)
+				{
+					meshFlags |= EMF_Skinned;
+					for (int w = 0; w < vf.numWeights && w < 4; w++)
+					{
+						v.bw[w] = weights[w];
+						if (weights[w] > 0)
+						{
+							int skinBoneID = boneIdxs[w];
+							int frameIdx = 0;
+							for (int h = 0; h < frameList.hanimCount; h++)
+							{
+								if (frameList.hSkinBoneID[h] == skinBoneID)
+								{
+									frameIdx = frameList.hanimToFrame[h];
+									break;
+								}
+							}
+							v.bi[w] = (unsigned char)frameIdx;
+						}
+					}
+				}
+
+				if (!MKSkinFlag)
+				{
+					Vec3 pos = { v.pos[0], v.pos[1], v.pos[2] };
+					pos = mat3_transform(vertMat, pos);
+					v.pos[0] = pos.x;
+					v.pos[1] = pos.y;
+					v.pos[2] = pos.z;
+				}
+
+				verts.push_back(v);
+			}
+
+			// strip to list
+			for (int j = 0; j < numIndices - 2; j++)
+			{
+				unsigned int i0 = vertBase + j;
+				unsigned int i1 = vertBase + j + 1;
+				unsigned int i2 = vertBase + j + 2;
+
+				const float* p0 = verts[i0].pos;
+				const float* p1 = verts[i1].pos;
+				const float* p2 = verts[i2].pos;
+				if (p0[0] == p1[0] && p0[1] == p1[1] && p0[2] == p1[2]) continue;
+				if (p1[0] == p2[0] && p1[1] == p2[1] && p1[2] == p2[2]) continue;
+				if (p0[0] == p2[0] && p0[1] == p2[1] && p0[2] == p2[2]) continue;
+
+				MKFace f;
+				if (j % 2 == 0)
+				{
+					f.v[0] = i0; f.v[1] = i1; f.v[2] = i2;
+				}
+				else
+				{
+					f.v[0] = i1; f.v[1] = i0; f.v[2] = i2;
+				}
+				faces.push_back(f);
+			}
+
+			unsigned int faceEnd = (unsigned int)faces.size();
+			if (faceEnd > faceStart)
+			{
+				MKMeshGroup sub;
+				sub.matID = matBase + matID;
+				sub.firstFace = faceStart;
+				sub.numFaces = faceEnd - faceStart;
+				groups.push_back(sub);
+			}
+
+			pFile.seekg(nextOfs, pFile.beg);
+		}
+
+		pFile.seekg(afterSkin, pFile.beg);
+	}
+
+	// mkd/a XBOX https://github.com/aap/rwtools/blob/f00a861451371fe1435e21b0404722eff7389686/src/xboxnative.cpp#L16
+	/*if (nativeFlags == 1 && !isPSP && isBM)
+	{
+		int splitCount = bm.numSplits;
+
+		RWChunk nativeHdr;
+		pFile.read((char*)&nativeHdr, sizeof(RWChunk));
+		unsigned int nativeDataStart = (unsigned int)pFile.tellg();
+		unsigned int nativeEnd = nativeDataStart + nativeHdr.size;
+
+		int platformID;
+		pFile.read((char*)&platformID, sizeof(int));
+
+		if (!(platformID == PLATFORM_XBOX))
+			return;
+	}
+	*/
+
 }
 
 void MKModelTool::DumpMesh(std::string path)
@@ -1580,6 +1979,17 @@ void MKModelTool::DumpDFF(std::string path, EExportType et)
 	if (et == Export_Generic)
 		skin = 0;
 
+	// pad dummy UVs if mesh has no UV data (e.g. reflection meshes)
+	if (!(meshFlags & EMF_UV) && skin)
+	{
+		meshFlags |= EMF_UV;
+		for (auto& v : verts)
+		{
+			v.uv[0] = 0.0f;
+			v.uv[1] = 0.0f;
+		}
+	}
+
 	std::vector<HAnimEntry> haList;
 	if (hanimCount > 0)
 	{
@@ -1651,6 +2061,7 @@ void MKModelTool::DumpDFF(std::string path, EExportType et)
 	if (hAnimRoot < 0 && hasHAnim && bones.size() > 1)
 		hAnimRoot = 1;
 
+	// todo arg for start and end
 	int nTex = 0;
 	for (int i = 0; i < (int)mats.size(); i++)
 	{
@@ -2051,7 +2462,7 @@ void MKModelTool::DumpDFF(std::string path, EExportType et)
 
 		int bp[MAX_PALETTE];
 		int bpc = 0;
-		if (skin && et == Export_SkinnedPalette)
+		if (skin && (et == Export_SkinnedPalette || et == Export_SkinnedNoUV))
 		{
 			unsigned int matID = sub.matID;
 			if (matID < mats.size() && mats[matID].mkBonePaletteCount > 0)
@@ -2129,7 +2540,7 @@ void MKModelTool::DumpDFF(std::string path, EExportType et)
 				unsigned short ID;
 				if (skin)
 				{
-					if (mt == 128)
+					if (mt == 128 || mt == 130)
 						ID = !(ch & 1) ? (vi * 4 + 130) : (vi * 4 + 488);
 					else if (mt == 131)
 						ID = !(ch & 1) ? (vi * 3 + 191) : (vi * 3 + 634);
@@ -2260,251 +2671,363 @@ void MKModelTool::DumpDFF(std::string path, EExportType et)
 				}
 			}
 
-			utmp = 0x01000103;
-			oFile.write((char*)&utmp, sizeof(int));
-
-			int addr = 0;
-			if (mt == 128) addr = 15;
-			else if (mt == 137) addr = 17;
-			else if (mt == 131) addr = 22;
-
-			utmp = VIFEnc(csz, addr, 0x8, 0, 0);
-			oFile.write((char*)&utmp, sizeof(int));
-
-			for (int i = 0; i < csz; i++)
+			// skinned no uv
+			if (mt == 130)
 			{
-				MKVert& v = verts[cv[i]];
-				unsigned int vx, vy, vz;
-				memcpy(&vx, &v.pos[0], sizeof(int));
-				memcpy(&vy, &v.pos[1], sizeof(int));
-				memcpy(&vz, &v.pos[2], sizeof(int));
-
-				if (skin && (mt == 128 || mt == 131))
-				{
-					vx &= 0xFFFFFC00;
-					vy &= 0xFFFFFC00;
-					vz &= 0xFFFFFC00;
-
-					int bi[4] = { 0 }, bn = 0;
-					if (mt == 128 && bpc > 0)
-						RemapPalette(v, bp, bpc, bi, &bn, haList);
-					else
-						GetHAnimBoneIndices(v, bi, &bn, haList);
-
-					unsigned int b1 = (bn > 0) ? ((bi[0] + 1) * 4) & 0x3FF : 0;
-					unsigned int b2 = (bn > 1) ? ((bi[1] + 1) * 4) & 0x3FF : 0;
-					unsigned int b3 = (bn > 2) ? ((bi[2] + 1) * 4) & 0x3FF : 0;
-					vx |= b1;
-					vy |= b2;
-					vz |= b3;
-				}
-				oFile.write((char*)&vx, sizeof(int));
-				oFile.write((char*)&vy, sizeof(int));
-				oFile.write((char*)&vz, sizeof(int));
-			}
-
-			if (et == Export_SkinnedNoUV && skin)
-			{
-				utmp = VIFEnc(csz, 1, 0xE, 0, 1);
+				// STCYCLE WL=1 CL=3
+				utmp = 0x01000103;
 				oFile.write((char*)&utmp, sizeof(int));
 
+				utmp = VIFEnc(csz, 0, 0x8, 0, 0);
+				oFile.write((char*)&utmp, sizeof(int));
+				for (int i = 0; i < csz; i++)
+				{
+					MKVert& v = verts[cv[i]];
+					oFile.write((char*)&v.pos[0], sizeof(float));
+					oFile.write((char*)&v.pos[1], sizeof(float));
+					oFile.write((char*)&v.pos[2], sizeof(float));
+				}
+
+				// bbone/skip at addr 1 (0x6E 4x8bit)
+				utmp = VIFEnc(csz, 1, 0xE, 0, 1);
+				oFile.write((char*)&utmp, sizeof(int));
 				for (int i = 0; i < csz; i++)
 				{
 					MKVert& v = verts[cv[i]];
 					float mw = 0;
 					int mbi = 0;
-					int bi[4] = { 0 }, bn = 0;
-					GetHAnimBoneIndices(v, bi, &bn, haList);
 
-					for (int w = 0; w < bn; w++)
+					if (bpc > 0)
 					{
-						if (v.bw[w] > mw)
+						int bi[4] = { 0 }, bn = 0;
+						RemapPalette(v, bp, bpc, bi, &bn, haList);
+						for (int w = 0; w < bn; w++)
 						{
-							mw = v.bw[w];
-							mbi = bi[w];
+							if (v.bw[w] > mw) { mw = v.bw[w]; mbi = bi[w]; }
 						}
-					}
-					unsigned char uc = (mbi + 1) * 4;
-					oFile.write((char*)&uc, sizeof(char));
-					oFile.write((char*)&pad, sizeof(char));
-					oFile.write((char*)&pad, sizeof(char));
-					uc = cs[i];
-					oFile.write((char*)&uc, sizeof(char));
-				}
-			}
-
-			addr = 0;
-			if (mt == 128) addr = 16;
-			else if (mt == 137) addr = 18;
-			else if (mt == 131) addr = 23;
-			else if (mt == 130) addr = 2;
-
-			utmp = VIFEnc(csz, addr, 0xA, 0, 0);
-			oFile.write((char*)&utmp, sizeof(int));
-
-			for (int i = 0; i < csz; i++)
-			{
-				MKVert& v = verts[cv[i]];
-				char nx = (char)(v.nrm[0] * 127.0f);
-				char ny = (char)(v.nrm[1] * 127.0f);
-				char nz = (char)(v.nrm[2] * 127.0f);
-				oFile.write(&nx, sizeof(char));
-				oFile.write(&ny, sizeof(char));
-				oFile.write(&nz, sizeof(char));
-			}
-
-			while ((unsigned int)oFile.tellp() % 4)
-				oFile.write((char*)&pad, sizeof(char));
-
-			if ((meshFlags & EMF_UV) && (mt == 128 || mt == 131))
-			{
-				addr = (mt == 128) ? 17 : 24;
-				utmp = VIFEnc(csz, addr, 0x5, 0, 0);
-				oFile.write((char*)&utmp, sizeof(int));
-				for (int i = 0; i < csz; i++)
-				{
-					MKVert& v = verts[cv[i]];
-					short su = (short)(v.uv[0] * 4096.0f);
-					short sv = (short)((1.0f - v.uv[1]) * 4096.0f);
-					oFile.write((char*)&su, sizeof(short));
-					oFile.write((char*)&sv, sizeof(short));
-				}
-			}
-
-			if ((meshFlags & EMF_UV) && mt == 137)
-			{
-				utmp = VIFEnc(csz, 19, 0x4, 0, 0);
-				oFile.write((char*)&utmp, sizeof(int));
-				for (int i = 0; i < csz; i++)
-				{
-					MKVert& v = verts[cv[i]];
-					float fu = v.uv[0];
-					float fv = 1.0f - v.uv[1];
-					oFile.write((char*)&fu, sizeof(float));
-					oFile.write((char*)&fv, sizeof(float));
-				}
-			}
-
-			if (mt == 137)
-			{
-				utmp = VIFEnc(csz, 20, 0xE, 0, 1);
-				oFile.write((char*)&utmp, sizeof(int));
-				for (int i = 0; i < csz; i++)
-				{
-					if (meshFlags & EMF_VertexColor)
-					{
-						MKVert& v = verts[cv[i]];
-						oFile.write((char*)&v.col[0], sizeof(char));
-						oFile.write((char*)&v.col[1], sizeof(char));
-						oFile.write((char*)&v.col[2], sizeof(char));
-						oFile.write((char*)&v.col[3], sizeof(char));
 					}
 					else
 					{
-						oFile.write((char*)&pad, sizeof(char));
-						oFile.write((char*)&pad, sizeof(char));
-						oFile.write((char*)&pad, sizeof(char));
-						unsigned char ff = 255;
-						oFile.write((char*)&ff, sizeof(char));
+						int bi[4] = { 0 }, bn = 0;
+						GetHAnimBoneIndices(v, bi, &bn, haList);
+						for (int w = 0; w < bn; w++)
+						{
+							if (v.bw[w] > mw) { mw = v.bw[w]; mbi = bi[w]; }
+						}
 					}
+
+					unsigned char uc = (unsigned char)((mbi + 1) * 4);
+					oFile.write((char*)&uc, sizeof(char));
+					oFile.write((char*)&pad, sizeof(char));
+					oFile.write((char*)&pad, sizeof(char));
+					uc = (unsigned char)cs[i];
+					oFile.write((char*)&uc, sizeof(char));
 				}
+
+				// normals at addr 2 (0x6A 3x8bit)
+				utmp = VIFEnc(csz, 2, 0xA, 0, 0);
+				oFile.write((char*)&utmp, sizeof(int));
+				for (int i = 0; i < csz; i++)
+				{
+					MKVert& v = verts[cv[i]];
+					char nx = (char)(v.nrm[0] * 127.0f);
+					char ny = (char)(v.nrm[1] * 127.0f);
+					char nz = (char)(v.nrm[2] * 127.0f);
+					oFile.write(&nx, sizeof(char));
+					oFile.write(&ny, sizeof(char));
+					oFile.write(&nz, sizeof(char));
+				}
+				while ((unsigned int)oFile.tellp() % 4)
+					oFile.write((char*)&pad, sizeof(char));
+
+				// STCYCLE + STMASK + ITOP + MSCAL
+				utmp = 0x01000101;
+				oFile.write((char*)&utmp, sizeof(int));
+				utmp = 0x20000000;
+				oFile.write((char*)&utmp, sizeof(int));
+				utmp = 0x00000000;
+				oFile.write((char*)&utmp, sizeof(int));
+				utmp = 0x04000000 | (csz & 0xFFFF);
+				oFile.write((char*)&utmp, sizeof(int));
+				utmp = 0x14000000;
+				oFile.write((char*)&utmp, sizeof(int));
 			}
-
-			utmp = 0x20000000;
-			oFile.write((char*)&utmp, sizeof(int));
-			utmp = 0xCFCFCFCF;
-			oFile.write((char*)&utmp, sizeof(int));
-
-			if (mt == 128 || mt == 131 || mt == 137)
+			else
 			{
-				addr = (mt == 131) ? 24 : 17;
-				utmp = VIFEnc(csz, addr, 0x1, 1, 0);
+				// STCYCLE
+				if (mt == 137)
+					utmp = 0x01000104;
+				else
+					utmp = 0x01000103;
+				oFile.write((char*)&utmp, sizeof(int));
+
+				int addr = 0;
+				if (mt == 128) addr = 15;
+				else if (mt == 137) addr = 17;
+				else if (mt == 131) addr = 22;
+
+				utmp = VIFEnc(csz, addr, 0x8, 0, 0);
 				oFile.write((char*)&utmp, sizeof(int));
 
 				for (int i = 0; i < csz; i++)
-					oFile.write((char*)&vidPre[i], sizeof(short));
+				{
+					MKVert& v = verts[cv[i]];
+					unsigned int vx, vy, vz;
+					memcpy(&vx, &v.pos[0], sizeof(int));
+					memcpy(&vy, &v.pos[1], sizeof(int));
+					memcpy(&vz, &v.pos[2], sizeof(int));
 
-				if ((csz * 2) % 4)
-					oFile.write((char*)&pad, sizeof(short));
+					if (skin && (mt == 128 || mt == 131))
+					{
+						vx &= 0xFFFFFC00;
+						vy &= 0xFFFFFC00;
+						vz &= 0xFFFFFC00;
+
+						int bi[4] = { 0 }, bn = 0;
+						if (mt == 128 && bpc > 0)
+							RemapPalette(v, bp, bpc, bi, &bn, haList);
+						else
+							GetHAnimBoneIndices(v, bi, &bn, haList);
+
+						unsigned int b1 = (bn > 0) ? ((bi[0] + 1) * 4) & 0x3FF : 0;
+						unsigned int b2 = (bn > 1) ? ((bi[1] + 1) * 4) & 0x3FF : 0;
+						unsigned int b3 = (bn > 2) ? ((bi[2] + 1) * 4) & 0x3FF : 0;
+						vx |= b1;
+						vy |= b2;
+						vz |= b3;
+					}
+					oFile.write((char*)&vx, sizeof(int));
+					oFile.write((char*)&vy, sizeof(int));
+					oFile.write((char*)&vz, sizeof(int));
+				}
+
+				if (et == Export_SkinnedNoUV && skin)
+				{
+					utmp = VIFEnc(csz, 1, 0xE, 0, 1);
+					oFile.write((char*)&utmp, sizeof(int));
+
+					for (int i = 0; i < csz; i++)
+					{
+						MKVert& v = verts[cv[i]];
+						float mw = 0;
+						int mbi = 0;
+
+						if (bpc > 0)
+						{
+							// use palette remapping like mt128
+							int bi[4] = { 0 }, bn = 0;
+							RemapPalette(v, bp, bpc, bi, &bn, haList);
+							for (int w = 0; w < bn; w++)
+							{
+								if (v.bw[w] > mw)
+								{
+									mw = v.bw[w];
+									mbi = bi[w];
+								}
+							}
+						}
+						else
+						{
+							int bi[4] = { 0 }, bn = 0;
+							GetHAnimBoneIndices(v, bi, &bn, haList);
+							for (int w = 0; w < bn; w++)
+							{
+								if (v.bw[w] > mw)
+								{
+									mw = v.bw[w];
+									mbi = bi[w];
+								}
+							}
+						}
+
+						unsigned char uc = (mbi + 1) * 4;
+						oFile.write((char*)&uc, sizeof(char));
+						oFile.write((char*)&pad, sizeof(char));
+						oFile.write((char*)&pad, sizeof(char));
+						uc = cs[i];
+						oFile.write((char*)&uc, sizeof(char));
+					}
+				}
+
+				addr = 0;
+				if (mt == 128)
+					addr = 16;
+				else if (mt == 137)
+					addr = 18;
+				else if (mt == 131)
+					addr = 23;
+				else if (mt == 130)
+					addr = 2;
+
+				utmp = VIFEnc(csz, addr, 0xA, 0, 0);
+				oFile.write((char*)&utmp, sizeof(int));
+
+				for (int i = 0; i < csz; i++)
+				{
+					MKVert& v = verts[cv[i]];
+					char nx = (char)(v.nrm[0] * 127.0f);
+					char ny = (char)(v.nrm[1] * 127.0f);
+					char nz = (char)(v.nrm[2] * 127.0f);
+					oFile.write(&nx, sizeof(char));
+					oFile.write(&ny, sizeof(char));
+					oFile.write(&nz, sizeof(char));
+				}
+
+				while ((unsigned int)oFile.tellp() % 4)
+					oFile.write((char*)&pad, sizeof(char));
+
+				if ((meshFlags & EMF_UV) && (mt == 128 || mt == 131))
+				{
+					addr = (mt == 128) ? 17 : 24;
+					utmp = VIFEnc(csz, addr, 0x5, 0, 0);
+					oFile.write((char*)&utmp, sizeof(int));
+					for (int i = 0; i < csz; i++)
+					{
+						MKVert& v = verts[cv[i]];
+						short su = (short)(v.uv[0] * 4096.0f);
+						short sv = (short)((1.0f - v.uv[1]) * 4096.0f);
+						oFile.write((char*)&su, sizeof(short));
+						oFile.write((char*)&sv, sizeof(short));
+					}
+				}
+
+				if ((meshFlags & EMF_UV) && mt == 137)
+				{
+					utmp = VIFEnc(csz, 19, 0x4, 0, 0);
+					oFile.write((char*)&utmp, sizeof(int));
+					for (int i = 0; i < csz; i++)
+					{
+						MKVert& v = verts[cv[i]];
+						float fu = v.uv[0];
+						float fv = 1.0f - v.uv[1];
+						oFile.write((char*)&fu, sizeof(float));
+						oFile.write((char*)&fv, sizeof(float));
+					}
+				}
+
+				if (mt == 137)
+				{
+					utmp = VIFEnc(csz, 20, 0xE, 0, 1);
+					oFile.write((char*)&utmp, sizeof(int));
+					for (int i = 0; i < csz; i++)
+					{
+						if (meshFlags & EMF_VertexColor)
+						{
+							MKVert& v = verts[cv[i]];
+							oFile.write((char*)&v.col[0], sizeof(char));
+							oFile.write((char*)&v.col[1], sizeof(char));
+							oFile.write((char*)&v.col[2], sizeof(char));
+							oFile.write((char*)&v.col[3], sizeof(char));
+						}
+						else
+						{
+							oFile.write((char*)&pad, sizeof(char));
+							oFile.write((char*)&pad, sizeof(char));
+							oFile.write((char*)&pad, sizeof(char));
+							unsigned char ff = 255;
+							oFile.write((char*)&ff, sizeof(char));
+						}
+					}
+				}
 
 				utmp = 0x20000000;
 				oFile.write((char*)&utmp, sizeof(int));
-				utmp = 0x3F3F3F3F;
+				utmp = 0xCFCFCFCF;
 				oFile.write((char*)&utmp, sizeof(int));
 
-				if (skin && et != Export_Generic)
+				if (mt == 128 || mt == 131 || mt == 137)
 				{
-					addr = 0;
-					if (mt == 128) addr = 15;
-					else if (mt == 131) addr = 22;
-
+					addr = (mt == 131) ? 24 : 17;
 					utmp = VIFEnc(csz, addr, 0x1, 1, 0);
 					oFile.write((char*)&utmp, sizeof(int));
 
 					for (int i = 0; i < csz; i++)
-					{
-						MKVert& v = verts[cv[i]];
-						int nw = CountWeights(v);
-						short w1 = (nw == 1) ? 4096 : (nw > 1) ? (short)(v.bw[0] * 4096.0f) : 4096;
-						oFile.write((char*)&w1, sizeof(short));
-					}
+						oFile.write((char*)&vidPre[i], sizeof(short));
+
 					if ((csz * 2) % 4)
 						oFile.write((char*)&pad, sizeof(short));
 
+					utmp = 0x20000000;
+					oFile.write((char*)&utmp, sizeof(int));
+					utmp = 0x3F3F3F3F;
+					oFile.write((char*)&utmp, sizeof(int));
+
+					if (skin && et != Export_Generic)
+					{
+						addr = 0;
+						if (mt == 128) addr = 15;
+						else if (mt == 131) addr = 22;
+
+						utmp = VIFEnc(csz, addr, 0x1, 1, 0);
+						oFile.write((char*)&utmp, sizeof(int));
+
+						for (int i = 0; i < csz; i++)
+						{
+							MKVert& v = verts[cv[i]];
+							int nw = CountWeights(v);
+							short w1 = (nw == 1) ? 4096 : (nw > 1) ? (short)(v.bw[0] * 4096.0f) : 4096;
+							oFile.write((char*)&w1, sizeof(short));
+						}
+						if ((csz * 2) % 4)
+							oFile.write((char*)&pad, sizeof(short));
+
+						addr = 0;
+						if (mt == 128) addr = 16;
+						else if (mt == 131) addr = 23;
+
+						utmp = VIFEnc(csz, addr, 0x1, 1, 0);
+						oFile.write((char*)&utmp, sizeof(int));
+
+						for (int i = 0; i < csz; i++)
+						{
+							MKVert& v = verts[cv[i]];
+							short w2 = (CountWeights(v) >= 2) ? (short)(v.bw[1] * 4096.0f) : 0;
+							oFile.write((char*)&w2, sizeof(short));
+						}
+
+						if ((csz * 2) % 4)
+							oFile.write((char*)&pad, sizeof(short));
+					}
+
+
 					addr = 0;
-					if (mt == 128) addr = 16;
-					else if (mt == 131) addr = 23;
+					if (mt == 128) addr = 17;
+					else if (mt == 137) addr = 18;
+					else if (mt == 131) addr = 24;
 
 					utmp = VIFEnc(csz, addr, 0x1, 1, 0);
+
 					oFile.write((char*)&utmp, sizeof(int));
 
 					for (int i = 0; i < csz; i++)
-					{
-						MKVert& v = verts[cv[i]];
-						short w2 = (CountWeights(v) >= 2) ? (short)(v.bw[1] * 4096.0f) : 0;
-						oFile.write((char*)&w2, sizeof(short));
-					}
+						oFile.write((char*)&vidPre[i], sizeof(short));
 
 					if ((csz * 2) % 4)
 						oFile.write((char*)&pad, sizeof(short));
 				}
 
+			}
 
-				addr = 0;
-				if (mt == 128) addr = 17;
-				else if (mt == 137) addr = 18;
-				else if (mt == 131) addr = 24;
+			if (mt != 130)
+			{
+				utmp = 0x01000101;
+				oFile.write((char*)&utmp, sizeof(int));
+				utmp = 0x20000000;
+				oFile.write((char*)&utmp, sizeof(int));
 
-				utmp = VIFEnc(csz, addr, 0x1, 1, 0);
+				utmp = 0; oFile.write((char*)&utmp, sizeof(int));
+				avc += csz;
+
+				if (ch == 0)
+					utmp = 0x04000000;
+				else
+					utmp = 0x04000000 | (avc & 1);
 
 				oFile.write((char*)&utmp, sizeof(int));
 
-				for (int i = 0; i < csz; i++)
-					oFile.write((char*)&vidPre[i], sizeof(short));
-
-				if ((csz * 2) % 4)
-					oFile.write((char*)&pad, sizeof(short));
+				utmp = (ch == 0) ? 0x14000000 : 0x17000000;
+				oFile.write((char*)&utmp, sizeof(int));
 			}
-
-			utmp = 0x01000101;
-			oFile.write((char*)&utmp, sizeof(int));
-			utmp = 0x20000000;
-			oFile.write((char*)&utmp, sizeof(int));
-
-			utmp = 0; oFile.write((char*)&utmp, sizeof(int));
-			avc += csz;
-
-			if (mt == 130)
-				utmp = 0x04000000 | csz;
-			else if (ch == 0)
-				utmp = 0x04000000;
-			else
-				utmp = 0x04000000 | (avc & 1);
-
-			oFile.write((char*)&utmp, sizeof(int));
-
-			utmp = (ch == 0) ? 0x14000000 : 0x17000000;
-			oFile.write((char*)&utmp, sizeof(int));
 		}
 
 		utmp = 0x11000000;

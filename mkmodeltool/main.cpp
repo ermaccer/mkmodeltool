@@ -6,20 +6,17 @@
 
 int main(int argc, char* argv[])
 {
-	bool _d_switch = false;
-	bool _b_switch = false;
-	bool _v_switch = false;
 	bool _e_switch = false;
-	bool _g_switch = false;
 	bool _c_switch = false;
-	bool _p_switch = false;
-	std::string m_param;
-	std::string a_param;
+	std::string t_param;
+	std::string o_param;
 
 	if (argc == 1) {
 		std::cout << "Usage: mkmodeltool <optional params> <file>\n"
-			<< "    -f <format> Specify model format.\n"
-			<< "    -e <modelType>  Specify export format (.DFF only): obj, smd\n"
+			<< "    -t <type> Specify model conversion type: CHARACTER, SKINNED, REFLECTION.\n"
+			<< "    -o <name> Specify output filename\n"
+			<< "    -e Export .mesh file from a .dff model\n"
+			<< "    -c Convert .mesh file to a .dff model\n"
 			;
 
 		return 1;
@@ -33,27 +30,17 @@ int main(int argc, char* argv[])
 		}
 		switch (argv[i][1])
 		{
-		case 'b': _b_switch = true;
-			break;
-		case 'd': _d_switch = true;
-			break;
-		case 'v': _v_switch = true;
-			break;
 		case 'e': _e_switch = true;
-			break;
-		case 'g': _g_switch = true;
 			break;
 		case 'c': _c_switch = true;
 			break;
-		case 'p': _p_switch = true;
-			break;
-		case 'm':
+		case 'o':
 			i++;
-			m_param = argv[i];
+			o_param = argv[i];
 			break;
-		case 'a':
+		case 't':
 			i++;
-			a_param = argv[i];
+			t_param = argv[i];
 			break;
 		default:
 			std::cout << "ERROR: Param does not exist: " << argv[i] << std::endl;
@@ -73,22 +60,44 @@ int main(int argc, char* argv[])
 		return 0;
 
 
+	std::string fileName = path;
+	//fileName = fileName.substr(0, fileName.find_last_of(".") + 1);
 
-    MKModelTool model;
 
-	if (!_b_switch)
+	EExportType type = Export_SkinnedPalette;
+	if (t_param == "CHARACTER") type = Export_SkinnedPalette;
+	if (t_param == "SKINNED") type = Export_Skinned;
+	if (t_param == "REFLECTION") type = Export_SkinnedNoUV;
+	// not supported and probably wont be
+	//if (t_param == "BGND") type = Export_Generic;
+
+	std::string extension = ".mesh";
+
+	if (_c_switch)
+		extension = ".dff";
+
+	std::string output = fileName + extension;
+
+	if (!o_param.empty())
+		output = o_param;
+
+
+	MKModelTool model;
+
+	if (_e_switch)
 	{
-		model.LoadDFF("COSTUME.dff");
-		model.DumpMesh("OUTPUT.mesh");
+		model.LoadDFF(path);
+		model.DumpMesh(output);
+		return 0;
+
 	}
-	else
+
+	if (_c_switch)
 	{
-		model.LoadMesh("OUTPUT.mesh");
-		model.DumpDFF("COSTUMEnew.dff");
+		model.LoadMesh(path);
+		model.DumpDFF(output, type);
+		return 0;
 	}
 
-   // model.LoadMesh("SmokeFinalScript.mesh");
-   // model.DumpDFF("tfg.dff");
-
-    return 0;
+	return 0;
 }

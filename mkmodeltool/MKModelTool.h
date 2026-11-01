@@ -49,6 +49,8 @@ private:
 	int atomicMeshType = 0;
 	int meshFlags = 0;
 
+
+	bool isPSP = false;
 public:
 	bool LoadDFF(std::string path);
 	bool LoadMesh(std::string path);
@@ -60,7 +62,7 @@ public:
 	void ReadGeometry(int geoIndex);
 
 	void DumpMesh(std::string path);
-	void DumpDFF(std::string path, EExportType et = Export_SkinnedPalette);
+	void DumpDFF(std::string path, EExportType et);
 	int GetHAnimFromFrame(int frameID, std::vector<HAnimEntry>& haList);
 	void RemapPalette(MKVert& v, int* pal, int pc, int* bi, int* bn, std::vector<HAnimEntry>& haList);
 	void GetHAnimBoneIndices(MKVert& v, int* bi, int* bn, std::vector<HAnimEntry>& haList);

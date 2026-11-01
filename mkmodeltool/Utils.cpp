@@ -68,31 +68,46 @@ MKSkinData parse_skin_nn(std::vector<char>& d, int nv, unsigned int ver)
 	sk.usedBoneCount = (unsigned char)d[pos++];
 	sk.maxWeights = (unsigned char)d[pos++];
 	pos++; // pad
-	pos += sk.usedBoneCount; 
+	pos += sk.usedBoneCount;
 	sk.numVert = nv;
 	sk.boneID.resize(nv * 4);
 	memcpy(sk.boneID.data(), d.data() + pos, nv * 4); pos += nv * 4;
 	sk.boneWgt.resize(nv * 16);
 	memcpy(sk.boneWgt.data(), d.data() + pos, nv * 16); pos += nv * 16;
+
 	sk.usedBoneList.resize(sk.boneCount);
-	for (int i = 0; i < sk.boneCount; i++)
+	if (ver < 0x34000 && sk.maxWeights == 0 && sk.boneCount > 0)
 	{
-		if (ver < 0x34000 && sk.maxWeights == 0)
+		int trailerStart = pos;
+		int nzLow = 0, nzHigh = 0;
+		for (int i = 0; i < sk.boneCount; i++)
+		{
+			unsigned char lo = (unsigned char)d[trailerStart + i * 68 + 0];
+			unsigned char hi = (unsigned char)d[trailerStart + i * 68 + 3];
+			if (lo) nzLow++;
+			if (hi) nzHigh++;
+		}
+		bool useHigh = (nzHigh > nzLow);
+
+		for (int i = 0; i < sk.boneCount; i++)
 		{
 			int f;
 			memcpy(&f, d.data() + pos, 4);
-			sk.usedBoneList[i] = f >> 24; 
+			sk.usedBoneList[i] = useHigh ? ((f >> 24) & 0xFF) : (f & 0xFF);
 			pos += 4;
+			pos += sizeof(XMFLOAT4X4);
 		}
-		else
+	}
+	else
+	{
+		for (int i = 0; i < sk.boneCount; i++)
 		{
 			sk.usedBoneList[i] = i;
+			pos += sizeof(XMFLOAT4X4);
 		}
-		pos += sizeof(XMFLOAT4X4); // skip inverse matrix
 	}
 	return sk;
 }
-
 MKSkinData parse_skin_native(std::vector<char>& d)
 {
 	MKSkinData sk;
@@ -142,12 +157,25 @@ MKBinMeshPLG parse_binmesh(std::vector<char>& d, int native)
 			{
 				for (unsigned int k = 2; k < nfi; k++)
 				{
-					unsigned int f1 = bm.splitIdx[i][k - 2], f2 = bm.splitIdx[i][k - 1], f3 = bm.splitIdx[i][k];
+					unsigned int f1 = bm.splitIdx[i][k - 2];
+					unsigned int f2 = bm.splitIdx[i][k - 1];
+					unsigned int f3 = bm.splitIdx[i][k];
 					if (f1 != f2 && f2 != f3 && f1 != f3)
 					{
 						MKFace fc;
-						if (k % 2 == 0) { fc.v[0] = f1; fc.v[1] = f2; fc.v[2] = f3; }
-						else { fc.v[0] = f2; fc.v[1] = f1; fc.v[2] = f3; }
+						if (k % 2 == 0)
+						{
+							fc.v[0] = f1;
+							fc.v[1] = f2;
+							fc.v[2] = f3;
+						}
+						else
+						{
+							fc.v[0] = f2;
+							fc.v[1] = f1;
+							fc.v[2] = f3;
+						}
+
 						bm.faces.push_back(fc);
 						bm.faceMatID.push_back(mid);
 					}
@@ -218,19 +246,19 @@ VertexIDListShared decode_shared_vidlist_skin(char* data, int dataSize, int useB
 
 		int v15 = val & 0x7FFF, vid;
 
-		if (useBP) 
+		if (useBP)
 			vid = (v15 < 488) ? ((v15 - 130) / 4) : ((v15 - 488) / 4);
-		else       
+		else
 			vid = (v15 < 634) ? ((v15 - 191) / 3) : ((v15 - 634) / 3);
 
-		if (i % 2 == 0) 
-		{ 
-			sv.prevIDs[i / 2] = vid; 
-			sv.skipPrev[i / 2] = skip; 
+		if (i % 2 == 0)
+		{
+			sv.prevIDs[i / 2] = vid;
+			sv.skipPrev[i / 2] = skip;
 		}
-		else 
-		{ 
-			sv.curIDs[i / 2] = vid; 
+		else
+		{
+			sv.curIDs[i / 2] = vid;
 			sv.skipCur[i / 2] = skip;
 		}
 	}
@@ -312,13 +340,13 @@ VertexIDListShared decode_shared_vidlist_map(char* data, int dataSize, int inter
 			else if (v1 >= 671) vid = ((v1 - 671) % 5 > 0) ? ((v1 - 679) / 5) : ((v1 - 671) / 5);
 		}
 		if (i % 2 == 0)
-		{ 
-			sv.prevIDs[i / 2] = vid; 
+		{
+			sv.prevIDs[i / 2] = vid;
 			sv.skipPrev[i / 2] = skip;
 		}
-		else 
-		{ 
-			sv.curIDs[i / 2] = vid;  
+		else
+		{
+			sv.curIDs[i / 2] = vid;
 			sv.skipCur[i / 2] = skip;
 		}
 	}
@@ -339,15 +367,15 @@ void create_trilist(std::vector<int>& skipList, int nv, std::vector<MKFace>& out
 			if (!skipList[i])
 			{
 				MKFace fc;
-				if (faceDir > 0) 
-				{ 
-					fc.v[0] = f1 + baseIdx; 
-					fc.v[1] = f2 + baseIdx; 
-					fc.v[2] = f3 + baseIdx; 
+				if (faceDir > 0)
+				{
+					fc.v[0] = f1 + baseIdx;
+					fc.v[1] = f2 + baseIdx;
+					fc.v[2] = f3 + baseIdx;
 				}
-				else 
-				{ 
-					fc.v[0] = f2 + baseIdx; 
+				else
+				{
+					fc.v[0] = f2 + baseIdx;
 					fc.v[1] = f1 + baseIdx;
 					fc.v[2] = f3 + baseIdx;
 				}
@@ -370,16 +398,16 @@ void create_tristrip_simple(std::vector<float>& verts, int nv, std::vector<MKFac
 		if (!same12 && !same23 && !same13)
 		{
 			MKFace fc;
-			if (dir > 0) 
-			{ 
-				fc.v[0] = j + baseIdx; 
-				fc.v[1] = j + 1 + baseIdx; 
+			if (dir > 0)
+			{
+				fc.v[0] = j + baseIdx;
+				fc.v[1] = j + 1 + baseIdx;
 				fc.v[2] = j + 2 + baseIdx;
 			}
-			else 
+			else
 			{
-				fc.v[0] = j + 1 + baseIdx; 
-				fc.v[1] = j + baseIdx; 
+				fc.v[0] = j + 1 + baseIdx;
+				fc.v[1] = j + baseIdx;
 				fc.v[2] = j + 2 + baseIdx;
 			}
 			outFaces.push_back(fc);
@@ -390,7 +418,7 @@ void create_tristrip_simple(std::vector<float>& verts, int nv, std::vector<MKFac
 
 
 
-MKFaceSetNoUV create_trilist_nouv(char* data, int dataSize,int* bonePalette, MKFrameList* fl)
+MKFaceSetNoUV create_trilist_nouv(char* data, int dataSize, int* bonePalette, MKFrameList* fl)
 {
 	MKFaceSetNoUV res;
 	int nv = dataSize / 4;
@@ -476,8 +504,8 @@ void fix_face_normals(std::vector<MKFace>& faces, int startFace, std::vector<flo
 
 		if (DotProduct(fn, n0) < 0 && DotProduct(fn, n1) < 0 && DotProduct(fn, n2) < 0)
 		{
-			unsigned int t = fc.v[1]; 
-			fc.v[1] = fc.v[2]; 
+			unsigned int t = fc.v[1];
+			fc.v[1] = fc.v[2];
 			fc.v[2] = t;
 		}
 	}

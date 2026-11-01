@@ -4,8 +4,29 @@
 #include "VIFCodes.h"
 #include <DirectXMath.h>
 
-#define PLATFORM_PS2 4
+// https://github.com/aap/librw/blob/master/src/rwbase.h
 
+enum Platform
+{
+	PLATFORM_NULL = 0,
+	// D3D7
+	PLATFORM_GL = 2,
+	// MAC
+	PLATFORM_PS2 = 4,
+	PLATFORM_XBOX = 5,
+	// GAMECUBE
+	// SOFTRAS
+	PLATFORM_D3D8 = 8,
+	PLATFORM_D3D9 = 9,
+	PLATFORM_PSP = 10,
+	// non-stock-RW platforms
+
+	PLATFORM_WDGL = 11,	// WarDrum OpenGL
+
+	NUM_PLATFORMS,
+
+	FOURCC_PS2 = 0x00325350		// 'PS2\0'
+};
 using namespace DirectX;
 
 
