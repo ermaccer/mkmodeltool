@@ -2,6 +2,8 @@
 
 PS2/PSP model conversion tool for PS2 MK games.
 
+<img alt="3dsmax" src="https://github.com/user-attachments/assets/9e786dd5-2184-44ff-b40b-5b951169f0cc" />
+
 # About
 
 Encoded models from PS2/PSP are saved into a generic .mesh format which removes the need to decode
@@ -12,6 +14,7 @@ The generated models are not meant to be used with hardware due to increased siz
 This is meant to be used with skinned models only, backgrounds and or static objects aren't directly supported. Those can be officially exported with RW 3.5 SDK.
 
 # Support
+
 - MKDA/MKD/MKA PS2 and PSP (MKU) to .mesh
 - .mesh to MKD/MKA .dff format
 
